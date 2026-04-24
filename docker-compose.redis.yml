@@ -1,0 +1,17 @@
+services:
+  agentforge-redis:
+    image: redis:7-alpine
+    container_name: agentforge-redis
+    command: redis-server --appendonly yes --loglevel warning
+    ports:
+      - "6379:6379"
+    volumes:
+      - agentforge_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  agentforge_redis_data:
