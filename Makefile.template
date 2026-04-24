@@ -12,7 +12,7 @@ PYTHON      ?= python3
 FRAMEWORK_DIR ?= .framework
 VENV         = .venv
 ACTIVATE     = . $(VENV)/bin/activate
-ENV_EXPORT   = export $$(grep -v '^#' .env | xargs)
+ENV_EXPORT   = set -a && . .env && set +a
 
 # Detect queue backend directly from project.yaml (no venv needed)
 QUEUE_BACKEND := $(shell grep -E '^\s*queue_backend\s*:' project.yaml 2>/dev/null \
