@@ -1,0 +1,173 @@
+# ============================================================
+# AgentForge — Framework Makefile Template
+# Included by the project Makefile via:
+#   -include $(FRAMEWORK_DIR)/framework/Makefile.template
+#
+# Variables expected from the project Makefile:
+#   FRAMEWORK_DIR   path to cloned framework repo (default: .framework)
+#   PYTHON          python binary (default: python3)
+# ============================================================
+
+PYTHON      ?= python3
+FRAMEWORK_DIR ?= .framework
+VENV         = .venv
+ACTIVATE     = . $(VENV)/bin/activate
+ENV_EXPORT   = export $$(grep -v '^#' .env | xargs)
+
+# Detect queue backend directly from project.yaml (no venv needed)
+QUEUE_BACKEND := $(shell grep -E '^\s*queue_backend\s*:' project.yaml 2>/dev/null \
+                   | awk -F: '{print $$2}' | tr -d ' \t\r\n')
+QUEUE_BACKEND := $(or $(QUEUE_BACKEND),yaml)
+
+REDIS_COMPOSE  = docker compose -f docker-compose.redis.yml
+
+# ============================================================
+# HELP
+# ============================================================
+.PHONY: help
+help:
+	@echo ""
+	@echo "AgentForge — $(shell grep 'name:' project.yaml 2>/dev/null | head -1 | awk -F: '{print $$2}' | xargs)"
+	@echo "----------------------------------------"
+	@echo "  make init          Bootstrap: pull framework, venv, install deps"
+	@echo "  make plan          Planner agent: PRD.md → tasks/task_queue.yaml"
+	@echo "  make run           Full build loop (plans if queue empty)"
+	@echo "  make test          Run pytest"
+	@echo "  make checkpoint    Force-save to context/CHECKPOINT.yaml"
+	@echo "  make status        Show task queue and checkpoint state"
+	@echo "  make redis-stop    Stop the AgentForge Redis container"
+	@echo "  make clean         Remove venv, cache, stop Redis"
+	@echo ""
+	@echo "  queue_backend      = $(QUEUE_BACKEND)"
+	@echo "  agent.default      = $(shell grep -A1 'default:' project.yaml 2>/dev/null | grep command | awk -F: '{print $$2}' | xargs)"
+	@echo ""
+
+# ============================================================
+# SETUP — called by project `make init` after framework clone
+# ============================================================
+.PHONY: _setup
+_setup: _sync_files _venv _install _dirs
+	@echo ""
+	@echo "Framework ready. Next steps:"
+	@echo "  1. Edit project.yaml  (set scm.owner, scm.repo)"
+	@echo "  2. cp .env.example .env  and set GITHUB_TOKEN"
+	@echo "  3. make plan"
+	@if [ "$(QUEUE_BACKEND)" = "redis" ]; then \
+		echo "  Note: queue_backend=redis — Redis starts automatically on plan/run"; \
+	fi
+	@echo ""
+
+.PHONY: _sync_files
+_sync_files:
+	@echo "[Framework] Syncing framework files..."
+	@cp $(FRAMEWORK_DIR)/framework/orchestrator.py        ./orchestrator.py
+	@cp -r $(FRAMEWORK_DIR)/framework/agents              ./agents
+	@cp $(FRAMEWORK_DIR)/framework/requirements.txt       ./requirements.txt
+	@cp $(FRAMEWORK_DIR)/framework/docker-compose.redis.yml ./docker-compose.redis.yml
+
+.PHONY: _venv
+_venv:
+	@echo "[Setup] Creating virtual environment..."
+	@$(PYTHON) -m venv $(VENV)
+
+.PHONY: _install
+_install:
+	@echo "[Setup] Installing dependencies..."
+	@$(ACTIVATE) && pip install --quiet --upgrade pip && pip install --quiet -r requirements.txt
+	@if [ "$(QUEUE_BACKEND)" = "redis" ]; then \
+		echo "[Setup] Installing redis-py (queue_backend=redis)..."; \
+		$(ACTIVATE) && pip install --quiet redis; \
+	fi
+
+.PHONY: _dirs
+_dirs:
+	@mkdir -p tasks tests context docs logs
+
+# ============================================================
+# REDIS — automatic lifecycle
+# ============================================================
+.PHONY: _redis_up
+_redis_up:
+ifeq ($(QUEUE_BACKEND),redis)
+	@echo "[Redis] queue_backend=redis — starting Redis container..."
+	@$(REDIS_COMPOSE) up -d --wait
+	@echo "[Redis] Ready on localhost:6379"
+else
+	@true
+endif
+
+.PHONY: redis-stop
+redis-stop:
+	@if $(REDIS_COMPOSE) ps -q agentforge-redis 2>/dev/null | grep -q .; then \
+		echo "[Redis] Stopping AgentForge Redis..."; \
+		$(REDIS_COMPOSE) down; \
+	else \
+		echo "[Redis] No Redis container running."; \
+	fi
+
+# ============================================================
+# PLAN
+# ============================================================
+.PHONY: plan
+plan: _redis_up
+	@echo "[Plan] Running Planner agent against PRD.md..."
+	@$(ACTIVATE) && $(ENV_EXPORT) && python orchestrator.py --plan-only
+
+# ============================================================
+# RUN
+# ============================================================
+.PHONY: run
+run: _redis_up
+	@echo "[Run] Starting orchestrator build loop..."
+	@$(ACTIVATE) && $(ENV_EXPORT) && python orchestrator.py
+
+# ============================================================
+# TEST
+# ============================================================
+.PHONY: test
+test:
+	@$(ACTIVATE) && pytest -q
+
+# ============================================================
+# CHECKPOINT
+# ============================================================
+.PHONY: checkpoint
+checkpoint:
+	@$(ACTIVATE) && python -c "
+from orchestrator import Checkpoint, TaskQueue
+cp = Checkpoint()
+state = cp.load()
+tasks = TaskQueue().load_all()
+completed = [t['task_id'] for t in tasks if t.get('status') == 'completed']
+escalated = [t['task_id'] for t in tasks if t.get('status') == 'escalated']
+state.update(tasks_completed=completed, tasks_escalated=escalated, last_action='manual_checkpoint')
+cp.save(state)
+print(f'Checkpoint saved: {len(completed)} completed, {len(escalated)} escalated')
+"
+
+# ============================================================
+# STATUS
+# ============================================================
+.PHONY: status
+status:
+	@$(ACTIVATE) && python -c "
+from orchestrator import TaskQueue, Checkpoint
+cp = Checkpoint().load()
+tasks = TaskQueue().load_all()
+print(f'\nCheckpoint: phase={cp[\"phase\"]}, last={cp[\"last_action\"]}')
+print('Queue:')
+for t in tasks:
+    retry = f\" (retry {t['retry_count']})\" if t.get('retry_count') else ''
+    comments = f\" [{len(t.get('comments',[]))} comment(s)]\" if t.get('comments') else ''
+    print(f\"  {t['task_id']:6} {t['status']:15} {t['task_name']}{retry}{comments}\")
+"
+
+# ============================================================
+# CLEAN
+# ============================================================
+.PHONY: clean
+clean: redis-stop
+	@echo "[Clean] Removing venv and cache..."
+	@rm -rf $(VENV) __pycache__ .pytest_cache
+	@find . -name "*.pyc" -delete
+	@echo "Done."
