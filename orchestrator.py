@@ -46,10 +46,58 @@ class SCMConfig(BaseModel):
     base_branch: str = "main"
 
 
+class AgentInstanceConfig(BaseModel):
+    """Settings for a single agent. Unset fields fall back to AgentConfig.default."""
+    command: Optional[str] = None
+    timeout: Optional[int] = None
+    max_retries: Optional[int] = None
+
+
 class AgentConfig(BaseModel):
-    command: str = "claude"
-    timeout: int = 300          # seconds per agent call
-    max_retries: int = 3        # retries on timeout/error
+    """
+    Per-agent model/CLI configuration.
+
+    project.yaml layout:
+        agent:
+          default:
+            command: claude       # fallback for any agent not explicitly configured
+            timeout: 300
+            max_retries: 3
+          planner:
+            command: claude-opus  # override for planner only
+            timeout: 600
+          builder:
+            command: claude       # inherits default timeout + retries
+          reviewer:
+            command: gpt4cli      # use a different CLI for reviewing
+
+    Any field omitted in a per-agent block is inherited from `default`.
+    Backwards-compatible: the old flat format (command/timeout/max_retries at root)
+    is automatically promoted to `default`.
+    """
+    default: AgentInstanceConfig = AgentInstanceConfig(
+        command="claude", timeout=300, max_retries=3
+    )
+    planner: AgentInstanceConfig = AgentInstanceConfig()
+    builder: AgentInstanceConfig = AgentInstanceConfig()
+    reviewer: AgentInstanceConfig = AgentInstanceConfig()
+
+    @classmethod
+    def model_validate(cls, obj, **kwargs):
+        # Backwards-compatibility: promote flat {command, timeout, max_retries} to default
+        if isinstance(obj, dict) and "command" in obj and "default" not in obj:
+            legacy = {k: obj.pop(k) for k in ("command", "timeout", "max_retries") if k in obj}
+            obj["default"] = legacy
+        return super().model_validate(obj, **kwargs)
+
+    def resolve(self, name: str) -> tuple:
+        """Return (command, timeout, max_retries) for the named agent, merged with defaults."""
+        override: AgentInstanceConfig = getattr(self, name, AgentInstanceConfig())
+        return (
+            override.command    or self.default.command    or "claude",
+            override.timeout    or self.default.timeout    or 300,
+            override.max_retries or self.default.max_retries or 3,
+        )
 
 
 class RedisConfig(BaseModel):
@@ -316,14 +364,12 @@ def _sanitize_text(text: str) -> str:
 class AgentRunner:
     """
     Model-agnostic agent invocation via CLI subprocess.
-    Change agent.command in project.yaml to swap models without code changes.
+    Each agent (planner/builder/reviewer) resolves its own command, timeout,
+    and max_retries from AgentConfig — allowing different models per role.
     """
 
-    def __init__(self, command: str, timeout: int = 300,
-                 max_retries: int = 3, agents_dir: str = "agents"):
-        self.command = command
-        self.timeout = timeout
-        self.max_retries = max_retries
+    def __init__(self, agent_cfg: AgentConfig, agents_dir: str = "agents"):
+        self.cfg = agent_cfg
         self.agents_dir = agents_dir
 
     def _load_prompt(self, name: str) -> str:
@@ -339,16 +385,18 @@ class AgentRunner:
             f.write(f"=== PROMPT ===\n{prompt}\n\n=== OUTPUT ===\n{output}\n")
 
     def _run(self, prompt: str, task_id: str = "unknown", agent: str = "agent") -> str:
-        """Run CLI agent with timeout and exponential-backoff retry. (#3)"""
+        """Run CLI agent with per-agent command/timeout/retry. (#3)"""
+        command, timeout, max_retries = self.cfg.resolve(agent)
+        print(f"[Agent] {agent} → {command} (timeout={timeout}s, retries={max_retries})")
         last_error: Exception = RuntimeError("No attempts made")
-        for attempt in range(self.max_retries):
+        for attempt in range(max_retries):
             try:
                 result = subprocess.run(
-                    [self.command],
+                    [command],
                     input=prompt.encode(),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    timeout=self.timeout,
+                    timeout=timeout,
                 )
                 output = result.stdout.decode()
                 if result.returncode != 0:
@@ -359,18 +407,18 @@ class AgentRunner:
                 return output
             except subprocess.TimeoutExpired as e:
                 last_error = e
-                print(f"[Agent] {agent} timed out (attempt {attempt + 1}/{self.max_retries})")
+                print(f"[Agent] {agent} timed out (attempt {attempt + 1}/{max_retries})")
             except Exception as e:
                 last_error = e
-                print(f"[Agent] {agent} error (attempt {attempt + 1}/{self.max_retries}): {e}")
+                print(f"[Agent] {agent} error (attempt {attempt + 1}/{max_retries}): {e}")
 
-            if attempt < self.max_retries - 1:
+            if attempt < max_retries - 1:
                 backoff = 2 ** attempt
                 print(f"[Agent] Retrying in {backoff}s...")
                 time.sleep(backoff)
 
         raise RuntimeError(
-            f"Agent {agent} failed after {self.max_retries} attempts: {last_error}"
+            f"Agent {agent} failed after {max_retries} attempts: {last_error}"
         )
 
     def run_planner(self, prd_text: str) -> str:
@@ -560,11 +608,7 @@ class Orchestrator:
         self.cfg = load_config(config_path)
         self.queue = _build_queue(self.cfg)
         self.checkpoint = Checkpoint()
-        self.agent = AgentRunner(
-            command=self.cfg.agent.command,
-            timeout=self.cfg.agent.timeout,
-            max_retries=self.cfg.agent.max_retries,
-        )
+        self.agent = AgentRunner(agent_cfg=self.cfg.agent)
         self.git = GitOps(base_branch=self.cfg.scm.base_branch)
         self.scm = _build_scm_api(self.cfg)
         self.metrics = Metrics()

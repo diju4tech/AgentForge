@@ -1,11 +1,11 @@
 """Tests for AgentRunner — reviewer output parsing and prompt injection guard."""
 import pytest
-from orchestrator import AgentRunner, _sanitize_text
+from orchestrator import AgentRunner, AgentConfig, _sanitize_text
 
 
 @pytest.fixture
 def runner():
-    return AgentRunner(command="claude", timeout=300, max_retries=3)
+    return AgentRunner(agent_cfg=AgentConfig())
 
 
 # ---- _parse_reviewer_output ----
