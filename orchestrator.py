@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shlex
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -392,7 +393,7 @@ class AgentRunner:
         for attempt in range(max_retries):
             try:
                 result = subprocess.run(
-                    [command],
+                    shlex.split(command),
                     input=prompt.encode(),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
