@@ -139,34 +139,32 @@ test:
 # ============================================================
 .PHONY: checkpoint
 checkpoint:
-	@$(ACTIVATE) && python -c "
-from orchestrator import Checkpoint, TaskQueue
-cp = Checkpoint()
-state = cp.load()
-tasks = TaskQueue().load_all()
-completed = [t['task_id'] for t in tasks if t.get('status') == 'completed']
-escalated = [t['task_id'] for t in tasks if t.get('status') == 'escalated']
-state.update(tasks_completed=completed, tasks_escalated=escalated, last_action='manual_checkpoint')
-cp.save(state)
-print(f'Checkpoint saved: {len(completed)} completed, {len(escalated)} escalated')
-"
+	@$(ACTIVATE) && python3 -c \
+		"from orchestrator import Checkpoint, TaskQueue; \
+		cp = Checkpoint(); \
+		state = cp.load(); \
+		tasks = TaskQueue().load_all(); \
+		completed = [t['task_id'] for t in tasks if t.get('status') == 'completed']; \
+		escalated = [t['task_id'] for t in tasks if t.get('status') == 'escalated']; \
+		state.update(tasks_completed=completed, tasks_escalated=escalated, last_action='manual_checkpoint'); \
+		cp.save(state); \
+		print(f'Checkpoint saved: {len(completed)} completed, {len(escalated)} escalated')"
 
 # ============================================================
 # STATUS
 # ============================================================
 .PHONY: status
 status:
-	@$(ACTIVATE) && python -c "
-from orchestrator import TaskQueue, Checkpoint
-cp = Checkpoint().load()
-tasks = TaskQueue().load_all()
-print(f'\nCheckpoint: phase={cp[\"phase\"]}, last={cp[\"last_action\"]}')
-print('Queue:')
-for t in tasks:
-    retry = f\" (retry {t['retry_count']})\" if t.get('retry_count') else ''
-    comments = f\" [{len(t.get('comments',[]))} comment(s)]\" if t.get('comments') else ''
-    print(f\"  {t['task_id']:6} {t['status']:15} {t['task_name']}{retry}{comments}\")
-"
+	@$(ACTIVATE) && python3 -c \
+		"from orchestrator import TaskQueue, Checkpoint; \
+		cp = Checkpoint().load(); \
+		tasks = TaskQueue().load_all(); \
+		print(f'\nCheckpoint: phase={cp[\"phase\"]}, last={cp[\"last_action\"]}'); \
+		print('Queue:'); \
+		[print('  {:6} {:15} {}{}{}'.format(t['task_id'], t['status'], t['task_name'], \
+		' (retry {})'.format(t['retry_count']) if t.get('retry_count') else '', \
+		' [{} comment(s)]'.format(len(t.get('comments',[]))) if t.get('comments') else '')) \
+		for t in tasks]"
 
 # ============================================================
 # CLEAN
