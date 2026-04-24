@@ -76,6 +76,18 @@ tasks:
 
 ---
 
+## INFRASTRUCTURE TASK RULE
+
+Every project that uses Docker MUST include a dedicated infrastructure task as **the first task** (T1) with:
+- `task_name`: "Bootstrap project infrastructure"
+- `target_service`: shared
+- This task creates: `docker-compose.yml` (all services, networks, volumes, `extra_hosts` if needed), a `Dockerfile` stub for each service, `.env.example` with every environment variable used by any service, and the top-level directory structure (`services/<name>/`, `tests/`, `docs/`, `context/`)
+- All subsequent tasks depend on T1
+
+No other task should create `docker-compose.yml` or `.env.example` from scratch — they extend/update them.
+
+---
+
 ## CONSTRAINTS
 
 - Do NOT write any code
@@ -84,3 +96,4 @@ tasks:
 - Every task MUST have at least 2 acceptance criteria
 - Every task MUST have at least 1 test requirement
 - Tasks with no dependencies can be listed first and run in parallel by the orchestrator
+- The first task (T1) MUST always be the infrastructure bootstrap task described above

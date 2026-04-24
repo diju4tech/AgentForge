@@ -34,7 +34,8 @@ You will receive a task definition appended below after the label `TASK:`. The t
 - Follow ALL `implementation_notes` — they contain critical architectural constraints
 - Use environment variables for all configuration (no hardcoded values)
 - If the task involves inter-service HTTP calls, use the service names specified (never `localhost` or `127.0.0.1`)
-- If the task involves Docker, include a valid `Dockerfile` and verify `docker-compose.yml` compatibility
+- If the task involves Docker, include a valid `Dockerfile` and update `docker-compose.yml` with this service's definition (ports, environment, volumes, networks, `extra_hosts` if the service needs to reach the host machine)
+- If the task introduces any new environment variables, add them to `.env.example` with a comment describing the variable, whether it is required, and an example value. Never put real secrets in `.env.example` — use placeholder values only (e.g., `your_key_here`)
 - All tests must be deterministic and not depend on external services unless explicitly stated
 - Address every item in `comments` — if retrying, explain how each comment was resolved
 
@@ -72,6 +73,15 @@ FILE: tests/<test_file_name>.py
 FILE: <Dockerfile or docker-compose.yml path>
 ---
 <full file contents>
+---
+```
+
+### ENV CHANGES (if applicable)
+If any new environment variables are introduced, show the additions to `.env.example`:
+```
+FILE: .env.example
+---
+<full file contents including new variables with placeholder values and comments>
 ---
 ```
 
