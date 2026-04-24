@@ -60,10 +60,16 @@ _setup: _sync_files _venv _install _dirs
 .PHONY: _sync_files
 _sync_files:
 	@echo "[Framework] Syncing framework files..."
-	@cp $(FRAMEWORK_DIR)/framework/orchestrator.py        ./orchestrator.py
-	@cp -r $(FRAMEWORK_DIR)/framework/agents              ./agents
-	@cp $(FRAMEWORK_DIR)/framework/requirements.txt       ./requirements.txt
-	@cp $(FRAMEWORK_DIR)/framework/docker-compose.redis.yml ./docker-compose.redis.yml
+	@cp $(FRAMEWORK_DIR)/framework/orchestrator.py           ./orchestrator.py
+	@cp -r $(FRAMEWORK_DIR)/framework/agents                 ./agents
+	@cp $(FRAMEWORK_DIR)/framework/requirements.txt          ./requirements.txt
+	@cp $(FRAMEWORK_DIR)/framework/docker-compose.redis.yml  ./docker-compose.redis.yml
+	@if [ ! -f "CLAUDE.md" ]; then \
+		echo "[Framework] Installing CLAUDE.md (first time)..."; \
+		cp $(FRAMEWORK_DIR)/framework/CLAUDE.md ./CLAUDE.md; \
+	else \
+		echo "[Framework] CLAUDE.md already exists — skipping (preserving customisations)"; \
+	fi
 
 .PHONY: _venv
 _venv:
